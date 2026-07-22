@@ -2,6 +2,12 @@
 
 BASE="http://127.0.0.1:8899"
 
+# Portable file-mode lookup. `stat -f %Lp` is BSD/macOS-only; under GNU
+# coreutils (Linux CI) `-f` means `--file-system` and takes no format
+# operand, so that invocation errors out and, under bats' errexit, fails
+# setup()/every test in the file. Try the GNU form first, fall back to BSD.
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+
 setup_file() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export REPO
@@ -9,10 +15,17 @@ setup_file() {
   # If something is already listening on 8899, the readiness probe below
   # would happily succeed against that foreign process instead of our test
   # server, and the whole suite would silently exercise the wrong code.
-  # Refuse to run rather than risk a false green.
-  if lsof -nP -iTCP:8899 -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "FATAL: port 8899 is already in use by another process; refusing to run tests against a foreign server. Free the port and retry." >&2
-    return 1
+  # Refuse to run rather than risk a false green. This guard only works if
+  # `lsof` itself is present -- if it's missing, "command not found" is also
+  # a non-zero exit, which would otherwise silently look identical to "port
+  # free" and vanish the safety check with no trace in the logs.
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -nP -iTCP:8899 -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "FATAL: port 8899 is already in use by another process; refusing to run tests against a foreign server. Free the port and retry." >&2
+      return 1
+    fi
+  else
+    echo "WARNING: lsof not found; skipping the port-8899-in-use guard. This run will not detect an already-listening foreign process on that port." >&2
   fi
 
   php -S 127.0.0.1:8899 -t "$REPO/site" "$REPO/tests/router.php" >/dev/null 2>&1 &
@@ -45,9 +58,9 @@ setup() {
   LINK_MODE=""
   if [ -f "$LINK" ]; then
     cp "$LINK" "$BATS_TEST_TMPDIR/link.bak"
-    # Capture the original mode (macOS/BSD stat) so teardown can restore it
-    # exactly, regardless of what a test did to the file's permissions.
-    LINK_MODE="$(stat -f %Lp "$LINK")"
+    # Capture the original mode so teardown can restore it exactly,
+    # regardless of what a test did to the file's permissions.
+    LINK_MODE="$(file_mode "$LINK")"
   fi
 }
 
@@ -76,6 +89,14 @@ teardown() {
 # Prints "<status> <resolved redirect target>"
 probe() {
   curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$BASE/go"
+}
+
+# Same as probe(), but against the trailing-slash form. This is the only
+# coverage of the trailing-slash rewrite (`^go/?$`), which is exactly what
+# Task 5's Apache .htaccess RewriteRule must reproduce in production, so it
+# needs to assert the destination, not just the status code.
+probe_slash() {
+  curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$BASE/go/"
 }
 
 @test "valid link.txt redirects to that URL" {
@@ -170,8 +191,8 @@ probe() {
   [[ "$output" == *"Cache-Control: no-store"* ]]
 }
 
-@test "trailing slash form /go/ also redirects" {
+@test "trailing slash form /go/ also redirects to the same destination" {
   printf 'https://valid.example.com/today\n' > "$LINK"
-  run curl -sS -o /dev/null -w '%{http_code}' "$BASE/go/"
-  [ "$output" = "302" ]
+  run probe_slash
+  [ "$output" = "302 https://valid.example.com/today" ]
 }

@@ -1143,11 +1143,24 @@ die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 rsync -avz --delete \
   --exclude '.DS_Store' \
+  --exclude 'link.txt' \
   "$REPO_ROOT/site/" \
   "$LAYS_REMOTE_HOST:$LAYS_REMOTE_PATH/"
 
 printf 'deployed site/ -> %s:%s/\n' "$LAYS_REMOTE_HOST" "$LAYS_REMOTE_PATH"
 ```
+
+`link.txt` is excluded deliberately: it is operator state, not build output.
+`set-link.sh`, not `deploy.sh`, owns the live value of `link.txt` on the
+server. Without this exclusion, any deploy from a clean clone or CI —
+including one that has nothing to do with today's link — would `rsync
+--delete` the live CTA destination back to whatever value happens to be
+committed in the repo, silently reverting the day's change with no error
+anywhere. Separately, `rsync -a` (implied by `-avz`) preserves file modes
+from the source, so `site/link.txt` in the local working tree must stay
+`644` — a repo-committed `600` would propagate to any fresh deploy target
+that doesn't already have the file (e.g. a first-time deploy, or one where
+this exclusion is later removed by someone who hasn't read this note).
 
 ```bash
 chmod +x deploy.sh

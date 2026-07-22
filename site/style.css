@@ -27,8 +27,19 @@ body {
   /* The content column is exactly the CTA button's width. */
   --col: min(88vw, 460px);
 
+  /* svh, not vh: on iOS Safari vh resolves against the expanded viewport and
+     pushes the CTA underneath the browser chrome. Custom properties parse
+     any unit at declaration time -- an unsupported one only fails at
+     substitution, silently zeroing the whole clamp() and dropping the
+     padding-top/margin-top declaration that consumes it. The vh line is the
+     fallback for browsers that do not understand svh (Chrome/WebView < 108,
+     Safari < 15.4 -- a real slice of the Thai in-app browsers that are this
+     page's primary audience), exactly like the min-height rule below. */
+  --pad-top:   clamp(20px, 4.9vh, 72px);    /* design: 95/1920  */
   --pad-top:   clamp(20px, 4.9svh, 72px);   /* design: 95/1920  */
+  --gap-logo:  clamp(28px, 9.7vh, 140px);   /* design: 186/1920 */
   --gap-logo:  clamp(28px, 9.7svh, 140px);  /* design: 186/1920 */
+  --gap-badge: clamp(18px, 5.8vh, 84px);    /* design: 111/1920 */
   --gap-badge: clamp(18px, 5.8svh, 84px);   /* design: 111/1920 */
 }
 
