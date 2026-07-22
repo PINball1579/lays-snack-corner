@@ -17,12 +17,28 @@ const LINK_FILE = __DIR__ . '/link.txt';
 // permanent campaign URL if one is provided.
 const FALLBACK_URL = '/';
 
+// RFC 3986 does not bound URL length, but no client can follow an
+// unbounded Location header; 2048 is the conservative, widely used ceiling
+// for URLs that must survive real HTTP clients and browsers.
+const MAX_URL_LENGTH = 2048;
+
 function is_valid_https_url(string $url): bool
 {
     if ($url === '' || strpbrk($url, "\r\n") !== false) {
         return false;
     }
+    if (strlen($url) > MAX_URL_LENGTH) {
+        return false;
+    }
     if (filter_var($url, FILTER_VALIDATE_URL) === false) {
+        return false;
+    }
+
+    // Reject userinfo (user[:pass]@host). A URL like
+    // https://www.lays.co.th@evil.example.com/ visually opens with the
+    // trusted domain but the real authority is evil.example.com — a
+    // brand-spoofing vector filter_var/FILTER_VALIDATE_URL does not catch.
+    if (parse_url($url, PHP_URL_USER) !== null || parse_url($url, PHP_URL_PASS) !== null) {
         return false;
     }
 
