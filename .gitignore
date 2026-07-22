@@ -1,0 +1,5 @@
+.DS_Store
+node_modules/
+link-history.log
+test-results/
+playwright-report/
