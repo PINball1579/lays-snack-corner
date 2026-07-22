@@ -1,0 +1,114 @@
+/* Lay's มตล Snack Corner — landing page
+   Ratios are measured from design.png (1080x1920). All three assets sit at 1:1
+   within that composition, so the percentages below are exact, not eyeballed. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  /* The pink at the top of the artwork. Prevents a white flash if bg.png is
+     slow or fails to load. Sampled from bg.png, do not change by eye. */
+  background-color: #FFA5E8;
+  font-family: system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overflow-x: hidden;
+}
+
+:root {
+  /* The content column is exactly the CTA button's width. */
+  --col: min(88vw, 460px);
+
+  --pad-top:   clamp(20px, 4.9svh, 72px);   /* design: 95/1920  */
+  --gap-logo:  clamp(28px, 9.7svh, 140px);  /* design: 186/1920 */
+  --gap-badge: clamp(18px, 5.8svh, 84px);   /* design: 111/1920 */
+}
+
+.bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
+.bg img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.stage {
+  position: relative;
+  z-index: 1;
+
+  /* svh, not vh: on iOS Safari vh resolves against the expanded viewport and
+     pushes the CTA underneath the browser chrome. The vh line is the fallback
+     for browsers that do not understand svh. */
+  min-height: 100vh;
+  min-height: 100svh;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  padding-top:    calc(var(--pad-top) + env(safe-area-inset-top, 0px));
+  padding-right:  calc(6vw + env(safe-area-inset-right, 0px));
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  padding-left:   calc(6vw + env(safe-area-inset-left, 0px));
+}
+
+.logo {
+  display: block;
+  width: calc(var(--col) * 0.208);  /* 190 / 913 */
+  height: auto;
+}
+
+.badge {
+  display: block;
+  width: calc(var(--col) * 0.517);  /* 472 / 913 */
+  height: auto;
+  margin-top: var(--gap-logo);
+}
+
+.cta {
+  display: block;
+  width: var(--col);
+  margin-top: var(--gap-badge);
+  border-radius: 16px;
+  transition: transform 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cta img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.cta:active {
+  transform: scale(0.97);
+}
+
+.cta:focus-visible {
+  outline: 3px solid #FFFFFF;
+  outline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cta {
+    transition: none;
+  }
+
+  .cta:active {
+    transform: none;
+  }
+}
