@@ -34,13 +34,21 @@ setup_file() {
 }
 
 teardown_file() {
-  kill "$(cat "$BATS_FILE_TMPDIR/server.pid")" 2>/dev/null || true
+  if [ -f "$BATS_FILE_TMPDIR/server.pid" ]; then
+    kill "$(cat "$BATS_FILE_TMPDIR/server.pid")" 2>/dev/null || true
+  fi
 }
 
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   LINK="$REPO/site/link.txt"
-  if [ -f "$LINK" ]; then cp "$LINK" "$BATS_TEST_TMPDIR/link.bak"; fi
+  LINK_MODE=""
+  if [ -f "$LINK" ]; then
+    cp "$LINK" "$BATS_TEST_TMPDIR/link.bak"
+    # Capture the original mode (macOS/BSD stat) so teardown can restore it
+    # exactly, regardless of what a test did to the file's permissions.
+    LINK_MODE="$(stat -f %Lp "$LINK")"
+  fi
 }
 
 teardown() {
@@ -54,6 +62,14 @@ teardown() {
     cp "$BATS_TEST_TMPDIR/link.bak" "$LINK"
   else
     rm -f "$LINK"
+  fi
+  # `cp` onto an existing destination preserves the destination's mode, not
+  # the source's, so the chmod u+rw above would otherwise stick permanently
+  # (e.g. 000 -> 600 instead of back to the original 644). Restore the exact
+  # mode captured in setup() so a full suite run leaves the file's mode
+  # unchanged.
+  if [ -f "$LINK" ] && [ -n "$LINK_MODE" ]; then
+    chmod "$LINK_MODE" "$LINK"
   fi
 }
 
@@ -140,6 +156,12 @@ probe() {
   chmod 000 "$LINK"
   run probe
   [ "$output" = "302 $BASE/" ]
+  # Pin that the response body carries no PHP warning (and in particular no
+  # leaked absolute filesystem path) — not just that status/redirect are
+  # right. A dropped is_readable() guard would still satisfy the assertion
+  # above while leaking site/link.txt's server path in a PHP Warning body.
+  run bash -c "curl -sS '$BASE/go'"
+  [ -z "$output" ]
 }
 
 @test "response is not cacheable" {
