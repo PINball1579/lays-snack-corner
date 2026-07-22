@@ -42,9 +42,37 @@ case "$url" in
   *$'\n'*) die "URL must be a single line" ;;
 esac
 
+# Must match go.php's MAX_URL_LENGTH (site/go.php) exactly: no client can
+# follow an unbounded Location header, and a URL this script accepts but
+# go.php then rejects is a dead CTA with no error anywhere.
+if [ "${#url}" -gt 2048 ]; then
+  die "URL exceeds the 2048-character maximum enforced by go.php (length: ${#url})"
+fi
+
+# --- Accept-set policy ------------------------------------------------
+# This regex is INTENTIONALLY stricter than go.php's is_valid_https_url()
+# (site/go.php) in every place the two differ: it also rejects uppercase
+# HTTPS://, IPv6 literals ([::1]), trailing-dot FQDNs, bare IP hosts, and
+# https://localhost/ that go.php would accept. That direction is safe --
+# worst case it blocks the operator, who edits the URL and retries; it
+# never lets an invalid URL slip past validation into link.txt.
+#
+# Everywhere else, the two validators MUST agree, or a URL this script
+# accepts can be one go.php then rejects -- a dead CTA with no error
+# anywhere, since visitors would silently get the fallback URL. That is
+# why the hostname character class below excludes `_`: PHP's
+# FILTER_VALIDATE_URL (which go.php uses) rejects underscores in a
+# hostname, so this script must too.
+#
+# When touching this regex: it must NEVER become MORE permissive than
+# go.php's is_valid_https_url(). Loosening it is exactly how a URL this
+# script accepts ends up rejected downstream -- or worse, exploited by
+# something go.php was relying on this script to have already blocked.
+# When in doubt, keep rejecting.
+#
 # Require https, a dotted host, and no whitespace. Rejects http://, bare
 # schemes, javascript:, and hosts with no TLD.
-if ! [[ "$url" =~ ^https://[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?\.[A-Za-z]{2,}(:[0-9]+)?(/[^[:space:]]*)?$ ]]; then
+if ! [[ "$url" =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}(:[0-9]+)?(/[^[:space:]]*)?$ ]]; then
   die "must be a well-formed https:// URL with a dotted hostname (got: $url)"
 fi
 
@@ -60,7 +88,9 @@ fi
 [ -n "$REMOTE_HOST" ] || die "LAYS_REMOTE_HOST is not set"
 [ -n "$REMOTE_PATH" ] || die "LAYS_REMOTE_PATH is not set"
 
-printf '%s\n' "$url" | ssh "$REMOTE_HOST" "cat > '$REMOTE_PATH/link.txt'"
+if ! printf '%s\n' "$url" | ssh "$REMOTE_HOST" "cat > '$REMOTE_PATH/link.txt'"; then
+  die "SSH push to $REMOTE_HOST failed. The local link file and history log were already updated to '$url', but the remote server was NOT updated -- the live site is still serving the previous URL. Re-run this command to retry the push."
+fi
 printf 'remote  : %s:%s/link.txt\n' "$REMOTE_HOST" "$REMOTE_PATH"
 
 if [ -z "$SITE_URL" ]; then
