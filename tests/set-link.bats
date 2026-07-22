@@ -60,7 +60,9 @@ setup() {
   "$SCRIPT" "https://promo.example.com/good"
   run "$SCRIPT" "http://promo.example.com/bad"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"https://"* ]]
+  # grep, not [[ ]]: under bats a failing [[ ]] mid-test does NOT fail the test
+  # (only a trailing one does), so this assertion would be silently vacuous.
+  printf '%s' "$output" | grep -q "https://"
   [ "$(cat "$LAYS_LINK_FILE")" = "https://promo.example.com/good" ]
 }
 
