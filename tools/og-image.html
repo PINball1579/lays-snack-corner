@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>og-image source</title>
+<!--
+  Source for site/assets/og-image.png — the 1200x630 social share card.
+
+  Regenerate with:  npm run og:build
+
+  Why this exists: the page's own artwork is 9:16 portrait. LINE, Facebook and X
+  render link previews at roughly 1.91:1 and center-crop anything taller, which
+  cut the Lay's logo out of the card entirely. This composes a correctly-shaped
+  card from the same assets so nothing is cropped.
+
+  The logo source is 190px wide (the largest that exists) and is displayed at
+  320px, a ~1.7x upscale. Acceptable on flat artwork at preview size. If a
+  higher-resolution logo ever arrives, drop it in and re-run — no code changes.
+-->
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 1200px;
+    height: 630px;
+    overflow: hidden;
+  }
+
+  .card {
+    position: relative;
+    width: 1200px;
+    height: 630px;
+    background: #FFA5E8;
+  }
+
+  .card .bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* Biased above center so the card lands on the yellow field rather than
+       the blue/green lower third, keeping contrast behind the red logo. */
+    object-position: center 30%;
+  }
+
+  .card .logo {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 320px;
+    height: auto;
+    filter: drop-shadow(0 10px 26px rgba(0, 0, 0, 0.28));
+  }
+</style>
+
+<div class="card">
+  <img class="bg" src="../site/assets/bg.png" alt="">
+  <img class="logo" src="../site/assets/logo-lays.png" alt="Lay's">
+</div>

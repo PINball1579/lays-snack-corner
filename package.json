@@ -1,0 +1,17 @@
+{
+  "name": "lays-snack-corner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lay's มตล Snack Corner campaign landing page",
+  "scripts": {
+    "serve": "php -S 127.0.0.1:8888 -t site tests/router.php",
+    "og:build": "node tools/make-og-image.cjs",
+    "test:unit": "bats tests/*.bats",
+    "test:e2e": "playwright test",
+    "test": "npm run test:unit && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "bats": "^1.13.0"
+  }
+}

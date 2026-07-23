@@ -1,0 +1,35 @@
+# Lay's มตล Snack Corner
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Stable public CTA endpoint. The href in index.html is /go and never changes.
+  RewriteRule ^go/?$ go.php [L]
+</IfModule>
+
+# link.txt is config, not content. Not secret, but there is no reason to serve
+# the raw file and invite polling.
+<Files "link.txt">
+  Require all denied
+</Files>
+
+<IfModule mod_headers.c>
+  # Fingerprint-free assets, changed only by filename. Safe to cache forever.
+  <FilesMatch "\.(png|jpg|jpeg|gif|webp|svg|ico|woff2)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+
+  # Markup and styles must be revalidated so copy edits go live immediately.
+  <FilesMatch "\.(html|css)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+DirectoryIndex index.html
+
+# Never expose a directory listing.
+Options -Indexes
