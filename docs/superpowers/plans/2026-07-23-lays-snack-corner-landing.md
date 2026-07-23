@@ -21,7 +21,8 @@ Every task's requirements implicitly include this section.
 - **`go.php` reads its destination only from the server-side `link.txt`.** It must never accept a URL from a query parameter, path segment, header, or cookie. That is an open redirect and a phishing vector aimed at the Lay's brand.
 - **`set-link.sh` accepts `https://` only.** It rejects `http://`, malformed URLs, empty input, and multi-line input.
 - **Source assets in `material/` are never modified.** Assets are copied into `site/assets/` under web-safe names.
-- **No JavaScript in the delivered page.** The CTA is a plain `<a>`.
+- **The CTA is a plain `<a>`** and must never depend on JavaScript: it has to work with JS disabled, stay crawlable, and support middle-click / long-press open-in-new-tab natively.
+- **Third-party JavaScript is limited to the Google Tag Manager snippet** (container `GTM-MV8VFGPS`, added 2026-07-23 at the client's request). This supersedes the original "no JavaScript in the delivered page" constraint. No first-party JS is added, and no page behavior may be made to depend on GTM loading — if it is blocked, fails, or is disabled, the page and the CTA must work exactly as before.
 - **RESOLVED (2026-07-23):** the site domain is the apex `laysmortorlor.com` (with `www` redirecting to it), and `go.php`'s `FALLBACK_URL` is `https://www.instagram.com/laysthailand`. Both were deferred at planning time; neither is a placeholder any longer. No placeholder is permitted anywhere in shipped code.
 
 ---
