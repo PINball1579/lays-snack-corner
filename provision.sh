@@ -298,6 +298,43 @@ configure_firewall() {
 
 # --- Unattended upgrades -------------------------------------------------
 
+harden_ssh() {
+  # Deploys authenticate as root with an SSH key, so password authentication
+  # is dead weight and the largest remaining attack surface on this box:
+  # a root-enabled SSH port with passwords on is brute-forced continuously.
+  #
+  # Disabling it is also the one change here that can permanently lock you
+  # out of your own server -- if no key is installed, turning passwords off
+  # leaves no way in except DigitalOcean's browser console. So this refuses
+  # to act unless it can see a usable key first. A loud skip is always
+  # better than an unreachable Droplet.
+  local keyfile="/root/.ssh/authorized_keys"
+
+  if [ ! -s "$keyfile" ] || ! grep -qE '^[[:space:]]*(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)' "$keyfile"; then
+    info "SKIPPING SSH hardening: no usable key found in $keyfile"
+    info "  Password authentication is still ENABLED."
+    info "  From your laptop run:  ssh-copy-id root@${DOMAIN_IP_HINT:-<droplet-ip>}"
+    info "  Confirm key login works, then re-run this script to disable passwords."
+    return 0
+  fi
+
+  info "disabling SSH password authentication (key found in $keyfile)"
+  cat > /etc/ssh/sshd_config.d/99-laysmortorlor.conf <<'EOF'
+# Managed by provision.sh — deploys authenticate with an SSH key.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitRootLogin prohibit-password
+EOF
+
+  if sshd -t 2>/dev/null; then
+    systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1 || true
+  else
+    rm -f /etc/ssh/sshd_config.d/99-laysmortorlor.conf
+    die "sshd rejected the hardening config; reverted it and left password auth enabled rather than risk locking you out."
+  fi
+}
+
 enable_unattended_upgrades() {
   info "enabling unattended-upgrades"
   cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
@@ -341,6 +378,10 @@ main() {
   configure_remoteip "$cf_ranges"
   configure_firewall "$cf_ranges"
   rm -f "$cf_ranges"
+
+  # After the firewall, so a mistake here cannot combine with a half-applied
+  # ruleset. Skips itself unless a usable SSH key is already installed.
+  harden_ssh
 
   enable_unattended_upgrades
   test_and_reload_apache

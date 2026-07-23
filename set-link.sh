@@ -13,7 +13,7 @@
 #   LAYS_HISTORY_FILE  change log             (default: link-history.log)
 #   LAYS_SKIP_REMOTE   set to 1 to skip SSH push and verification
 #   LAYS_REMOTE_HOST   ssh target, e.g. master_abc@203.0.113.10
-#   LAYS_REMOTE_PATH   remote public_html path
+#   LAYS_REMOTE_PATH   remote document root, e.g. /var/www/laysmortorlor.com
 #   LAYS_SITE_URL      public origin, e.g. https://example.com
 
 set -euo pipefail

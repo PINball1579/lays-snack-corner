@@ -42,7 +42,7 @@ earns its keep here.
 lay's/
 ├── design.png                  reference only — not deployed
 ├── material/                   source assets — not deployed
-├── site/                       ← contents deploy to public_html/
+├── site/                       ← contents deploy to the document root
 │   ├── index.html
 │   ├── style.css
 │   ├── go.php
@@ -187,7 +187,7 @@ asking them to wipe their browser cache.
 it:
 
 1. writes the local `site/link.txt`
-2. writes the remote `public_html/link.txt` over SSH
+2. writes the remote `link.txt` in the document root, over SSH
 3. appends a dated entry to the local `link-history.log`
 4. verifies by requesting `https://<domain>/go` and asserting the `Location` header
    matches
@@ -217,7 +217,7 @@ exactly one input and that input is a file under our control.
 `set-link.sh` rejects any scheme other than `https`, rejects malformed URLs, and rejects
 empty input.
 
-`link.txt` lives inside `public_html/` and would otherwise be readable at
+`link.txt` lives inside the document root and would otherwise be readable at
 `https://<domain>/link.txt`. `.htaccess` denies direct access to it. The contents are not
 secret, but exposing the raw config file invites people to poll it and serves no purpose.
 

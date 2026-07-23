@@ -134,3 +134,24 @@ all_scripts() {
   ! grep -q 'public_html' "$DEPLOY"
   ! grep -qi 'cloudways' "$DEPLOY"
 }
+
+@test "provision.sh refuses to disable SSH passwords without an installed key" {
+  # Turning off password auth with no key installed permanently locks the
+  # operator out of the Droplet -- recoverable only via DigitalOcean's browser
+  # console. The guard must check authorized_keys and bail out first.
+  run grep -n "authorized_keys" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+
+  guard="$(grep -n 'SKIPPING SSH hardening' "$REPO/provision.sh" | head -1 | cut -d: -f1)"
+  disable="$(grep -n '^PasswordAuthentication no' "$REPO/provision.sh" | head -1 | cut -d: -f1)"
+  [ -n "$guard" ]
+  [ -n "$disable" ]
+  # The bail-out must appear before the directive that disables passwords.
+  [ "$guard" -lt "$disable" ]
+}
+
+@test "provision.sh validates sshd config before reloading" {
+  # A malformed drop-in that is reloaded without `sshd -t` takes SSH down.
+  run grep -q "sshd -t" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+}
