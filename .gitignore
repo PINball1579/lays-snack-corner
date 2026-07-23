@@ -6,3 +6,4 @@ playwright-report/
 blob-report/
 .playwright/
 .superpowers/
+.env.deploy
