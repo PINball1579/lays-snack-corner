@@ -26,7 +26,7 @@ Images are cached for a year. To swap one, change its **filename** and update
 ## Check what is live right now
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code} -> %{redirect_url}\n' https://example.com/go
+curl -sS -o /dev/null -w '%{http_code} -> %{redirect_url}\n' https://laysmortorlor.com/go
 ```
 
 ## Past link changes
@@ -36,7 +36,7 @@ curl -sS -o /dev/null -w '%{http_code} -> %{redirect_url}\n' https://example.com
 
 ## If the button goes nowhere
 
-1. `curl -sSI https://example.com/go` — expect `302` and `cf-cache-status: BYPASS`
+1. `curl -sSI https://laysmortorlor.com/go` — expect `302` and `cf-cache-status: BYPASS`
 2. `cf-cache-status: HIT` means the Cloudflare cache rule for `/go` is not
    matching. Fix it in Caching -> Cache Rules.
 3. A `500` means `go.php` is broken. It is designed never to 500 — it falls back

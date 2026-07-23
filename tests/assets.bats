@@ -28,10 +28,13 @@ setup() {
   [[ "$output" == *"PNG image data, 913 x 280"* ]]
 }
 
-@test "Open Graph image exists at 1080x1920" {
+@test "Open Graph image exists at 1200x630" {
+  # 1200x630 (~1.91:1) is what LINE, Facebook and X render link previews at.
+  # The page's own artwork is 9:16 portrait; handing that to them center-crops
+  # the Lay's logo out of the card entirely. Regenerate with: npm run og:build
   run file "$REPO/site/assets/og-image.png"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PNG image data, 1080 x 1920"* ]]
+  [[ "$output" == *"PNG image data, 1200 x 630"* ]]
 }
 
 @test "favicon exists" {
