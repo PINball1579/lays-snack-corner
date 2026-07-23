@@ -175,3 +175,19 @@ all_scripts() {
   run grep -q "(v6)" "$REPO/provision.sh"
   [ "$status" -eq 0 ]
 }
+
+@test "deploy.sh avoids the rsync chmod flag unsupported by macOS openrsync" {
+  # macOS ships openrsync, which rejects that flag with "invalid argument",
+  # so it made deploy.sh fail outright on a stock Mac. Modes are normalized
+  # server-side instead: portable, and it asserts the final state rather
+  # than trusting a transfer flag.
+  run grep -q "chmod=" "$REPO/deploy.sh"
+  [ "$status" -ne 0 ]
+}
+
+@test "deploy.sh normalizes file modes on the server after syncing" {
+  run grep -q "chmod 755" "$REPO/deploy.sh"
+  [ "$status" -eq 0 ]
+  run grep -q "chmod 644" "$REPO/deploy.sh"
+  [ "$status" -eq 0 ]
+}

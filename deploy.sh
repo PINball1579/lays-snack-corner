@@ -26,18 +26,26 @@ die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 # Without this exclusion, a plain --delete sync would overwrite it with the
 # committed seed value on every deploy and silently revert the live CTA.
 #
-# --chmod=D755,F644 forces sane modes on the server regardless of whatever
-# permissions the files happen to carry on the deploying machine -- www-data
-# needs read access to every file and read+execute on every directory to
-# serve them at all.
 rsync -avz --delete \
   --exclude '.DS_Store' \
   --exclude 'link.txt' \
-  --chmod=D755,F644 \
   "$REPO_ROOT/site/" \
   "$LAYS_REMOTE_HOST:$LAYS_REMOTE_PATH/"
 
 printf 'deployed site/ -> %s:%s/\n' "$LAYS_REMOTE_HOST" "$LAYS_REMOTE_PATH"
+
+# Normalize modes on the server rather than via rsync --chmod: macOS ships
+# openrsync, which rejects --chmod outright ("invalid argument"), so the flag
+# made this script fail on a stock Mac. Doing it server-side is portable
+# across rsync flavors and asserts the final state instead of trusting a
+# transfer flag. www-data needs read on every file and read+execute on every
+# directory to serve them at all.
+#
+# This also catches link.txt, which is excluded from the sync above but still
+# lives in this directory -- a 600 link.txt is unreadable by www-data and
+# produces a silently dead CTA with no error in any log.
+ssh "$LAYS_REMOTE_HOST" "find '$LAYS_REMOTE_PATH' -type d -exec chmod 755 {} + && find '$LAYS_REMOTE_PATH' -type f -exec chmod 644 {} +"
+printf 'normalized modes on %s (dirs 755, files 644)\n' "$LAYS_REMOTE_PATH"
 
 # link.txt is excluded from the sync above (by design, see comment), so its
 # mode is never touched by --chmod either. It still needs to be verified
