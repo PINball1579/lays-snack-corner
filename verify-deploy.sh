@@ -163,17 +163,23 @@ check_go_cache_nostore() {
 }
 
 check_go_cf_cache_bypass() {
-  local name="GET /go carries cf-cache-status: BYPASS"
+  local name="GET /go is never served from the Cloudflare cache"
   if [ "$IS_IP" -eq 1 ]; then
     skip "$name" "running against the raw origin IP; Cloudflare is not in front of this request"
     return
   fi
   local headers
   headers="$(curl -sSI ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} "$HTTPS_BASE/go" | tr -d '\r')"
-  if printf '%s\n' "$headers" | grep -qi '^cf-cache-status: *BYPASS$'; then
+  # BYPASS and DYNAMIC both mean "not served from cache". Cloudflare reports
+  # DYNAMIC for responses it considers inherently uncacheable -- a 302 with
+  # no-store qualifies -- regardless of an explicit bypass rule, so asserting
+  # BYPASS specifically fails on a correctly configured zone. What actually
+  # matters is that it is never HIT: a cached redirect would keep serving
+  # yesterday's destination after set-link.sh reported success.
+  if printf '%s\n' "$headers" | grep -qiE '^cf-cache-status: *(BYPASS|DYNAMIC)$'; then
     pass "$name"
   else
-    fail "$name" "cf-cache-status: BYPASS not found; headers were:\n$headers"
+    fail "$name" "expected cf-cache-status BYPASS or DYNAMIC (never HIT); headers were:\n$headers"
   fi
 }
 

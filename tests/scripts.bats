@@ -220,3 +220,15 @@ all_scripts() {
   run bash -c "printf '%s' \"$output\" | grep -c 'unbound variable' || true"
   [ "$output" = "0" ]
 }
+
+@test "provision.sh scales php-fpm and Apache to the machine's RAM" {
+  # Ubuntu defaults (pm.max_children = 5, MaxRequestWorkers = 150) are sized
+  # for a minimal box. Without this, resizing the Droplet delivers almost none
+  # of the capacity it is billed for.
+  run grep -q "tune_for_hardware" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+  run grep -q "pm.max_children" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+  run grep -q "MaxRequestWorkers" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+}
