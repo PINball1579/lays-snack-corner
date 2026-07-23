@@ -57,6 +57,10 @@ HTTPS_BASE="https://${HOST}"
 HTTP_BASE="http://${HOST}"
 
 # curl flags shared by every HTTPS request in this script.
+# Every array below is expanded as ${arr[@]+"${arr[@]}"}, never "${arr[@]}":
+# under `set -u`, bash 3.2 -- which macOS still ships and which this script
+# is run from -- treats an EMPTY array expansion as an unbound variable and
+# aborts. The naive form made every check in this script fail.
 CURL_TLS_FLAGS=()
 if [ "$IS_IP" -eq 1 ]; then
   # Bypassing Cloudflare entirely: the origin cert cannot match a bare IP,
@@ -80,7 +84,7 @@ skip() { printf '[SKIP] %s -- %s\n' "$1" "$2"; SKIP_COUNT=$((SKIP_COUNT + 1)); }
 check_root_200() {
   local name="GET / returns 200 and serves the page"
   local out
-  out="$(curl -sS "${CURL_TLS_FLAGS[@]}" -o /dev/null -w '%{http_code}' "$HTTPS_BASE/")"
+  out="$(curl -sS ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} -o /dev/null -w '%{http_code}' "$HTTPS_BASE/")"
   if [ "$out" = "200" ]; then
     pass "$name"
   else
@@ -91,7 +95,7 @@ check_root_200() {
 check_go_302() {
   local name="GET /go returns 302 (never 301) to the current link.txt destination"
   local out status location
-  out="$(curl -sS "${CURL_TLS_FLAGS[@]}" -o /dev/null -w '%{http_code} %{redirect_url}' "$HTTPS_BASE/go")"
+  out="$(curl -sS ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} -o /dev/null -w '%{http_code} %{redirect_url}' "$HTTPS_BASE/go")"
   status="${out%% *}"
   location="${out#* }"
   if [ "$status" = "302" ] && [ "$location" = "$EXPECTED_LINK" ]; then
@@ -104,7 +108,7 @@ check_go_302() {
 check_go_slash_302() {
   local name="GET /go/ (trailing slash) also returns 302"
   local out status location
-  out="$(curl -sS "${CURL_TLS_FLAGS[@]}" -o /dev/null -w '%{http_code} %{redirect_url}' "$HTTPS_BASE/go/")"
+  out="$(curl -sS ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} -o /dev/null -w '%{http_code} %{redirect_url}' "$HTTPS_BASE/go/")"
   status="${out%% *}"
   location="${out#* }"
   if [ "$status" = "302" ] && [ "$location" = "$EXPECTED_LINK" ]; then
@@ -117,7 +121,7 @@ check_go_slash_302() {
 check_linktxt_403() {
   local name="GET /link.txt returns 403"
   local out
-  out="$(curl -sS "${CURL_TLS_FLAGS[@]}" -o /dev/null -w '%{http_code}' "$HTTPS_BASE/link.txt")"
+  out="$(curl -sS ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} -o /dev/null -w '%{http_code}' "$HTTPS_BASE/link.txt")"
   if [ "$out" = "403" ]; then
     pass "$name"
   else
@@ -128,7 +132,7 @@ check_linktxt_403() {
 check_asset_cache_immutable() {
   local name="GET /assets/bg.png carries Cache-Control: public, max-age=31536000, immutable"
   local headers
-  headers="$(curl -sSI "${CURL_TLS_FLAGS[@]}" "$HTTPS_BASE/assets/bg.png" | tr -d '\r')"
+  headers="$(curl -sSI ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} "$HTTPS_BASE/assets/bg.png" | tr -d '\r')"
   if printf '%s\n' "$headers" | grep -qi '^Cache-Control: public, max-age=31536000, immutable$'; then
     pass "$name"
   else
@@ -139,7 +143,7 @@ check_asset_cache_immutable() {
 check_root_cache_nocache() {
   local name="GET / carries Cache-Control: no-cache"
   local headers
-  headers="$(curl -sSI "${CURL_TLS_FLAGS[@]}" "$HTTPS_BASE/" | tr -d '\r')"
+  headers="$(curl -sSI ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} "$HTTPS_BASE/" | tr -d '\r')"
   if printf '%s\n' "$headers" | grep -qi '^Cache-Control: no-cache$'; then
     pass "$name"
   else
@@ -150,7 +154,7 @@ check_root_cache_nocache() {
 check_go_cache_nostore() {
   local name="GET /go carries Cache-Control: no-store"
   local headers
-  headers="$(curl -sSI "${CURL_TLS_FLAGS[@]}" "$HTTPS_BASE/go" | tr -d '\r')"
+  headers="$(curl -sSI ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} "$HTTPS_BASE/go" | tr -d '\r')"
   if printf '%s\n' "$headers" | grep -qi '^Cache-Control:.*no-store'; then
     pass "$name"
   else
@@ -165,7 +169,7 @@ check_go_cf_cache_bypass() {
     return
   fi
   local headers
-  headers="$(curl -sSI "${CURL_TLS_FLAGS[@]}" "$HTTPS_BASE/go" | tr -d '\r')"
+  headers="$(curl -sSI ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} "$HTTPS_BASE/go" | tr -d '\r')"
   if printf '%s\n' "$headers" | grep -qi '^cf-cache-status: *BYPASS$'; then
     pass "$name"
   else
@@ -196,7 +200,7 @@ check_www_redirects_to_apex() {
     resolve_args=(--resolve "${WWW_DOMAIN}:443:${HOST}")
   fi
   local out status location
-  out="$(curl -sS "${CURL_TLS_FLAGS[@]}" "${resolve_args[@]}" -o /dev/null -w '%{http_code} %{redirect_url}' "https://${WWW_DOMAIN}/")"
+  out="$(curl -sS ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} ${resolve_args[@]+"${resolve_args[@]}"} -o /dev/null -w '%{http_code} %{redirect_url}' "https://${WWW_DOMAIN}/")"
   status="${out%% *}"
   location="${out#* }"
   case "$status" in
@@ -212,9 +216,9 @@ check_www_redirects_to_apex() {
 check_no_directory_listing() {
   local name="no directory listing at /assets/"
   local status body
-  status="$(curl -sS "${CURL_TLS_FLAGS[@]}" -o /dev/null -w '%{http_code}' "$HTTPS_BASE/assets/")"
+  status="$(curl -sS ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} -o /dev/null -w '%{http_code}' "$HTTPS_BASE/assets/")"
   if [ "$status" = "200" ]; then
-    body="$(curl -sS "${CURL_TLS_FLAGS[@]}" "$HTTPS_BASE/assets/")"
+    body="$(curl -sS ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} "$HTTPS_BASE/assets/")"
     if printf '%s' "$body" | grep -qi 'Index of /assets'; then
       fail "$name" "server returned a directory listing (200 with 'Index of /assets')"
       return

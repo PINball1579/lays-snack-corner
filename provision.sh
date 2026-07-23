@@ -63,11 +63,38 @@ require_root_and_ubuntu_24_04() {
 
 # --- Packages & modules --------------------------------------------------
 
+wait_for_dpkg_lock() {
+  # Every fresh Ubuntu cloud image runs unattended-upgrades on first boot, and
+  # it holds the dpkg lock for minutes. Without this wait, provisioning a
+  # brand-new Droplet fails on a race that has nothing to do with the script
+  # -- and the apt error message ("Could not get lock") gives no hint that
+  # simply waiting is the fix. Observed on a real 24.04 Droplet.
+  local waited=0
+  local max="${DPKG_LOCK_TIMEOUT:-600}"
+
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    if [ "$waited" -eq 0 ]; then
+      info "dpkg lock held by another process (likely unattended-upgrades on first boot); waiting"
+    fi
+    if [ "$waited" -ge "$max" ]; then
+      die "dpkg lock still held after ${max}s. Check with: ps -o pid,etime,cmd -p \$(fuser /var/lib/dpkg/lock-frontend)"
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+
+  [ "$waited" -gt 0 ] && info "dpkg lock released after ~${waited}s"
+  return 0
+}
+
 install_packages() {
+  wait_for_dpkg_lock
+
   info "apt-get update"
   DEBIAN_FRONTEND=noninteractive apt-get update -qq
 
   info "installing apache2, php8.3-fpm, ufw, curl, unattended-upgrades"
+  wait_for_dpkg_lock
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     apache2 php8.3-fpm ufw curl unattended-upgrades
 }
@@ -184,7 +211,7 @@ configure_remoteip() {
   {
     printf '# Managed by provision.sh. Trust CF-Connecting-IP only from Cloudflare edges.\n'
     printf 'RemoteIPHeader CF-Connecting-IP\n'
-    while IFS= read -r cidr; do
+    while IFS= read -r cidr || [ -n "$cidr" ]; do
       [ -n "$cidr" ] || continue
       printf 'RemoteIPTrustedProxy %s\n' "$cidr"
     done < "$ranges_file"
@@ -247,7 +274,19 @@ fetch_cloudflare_ranges() {
     die "response from $CF_IPV6_URL does not look like a list of IPv6 CIDR ranges. Aborting -- refusing to open 80/443 to the world or proceed with a partial ruleset."
   fi
 
-  cat "$tmp_v4" "$tmp_v6" > "$dest"
+  # `awk 1`, not `cat`: Cloudflare serves these lists WITHOUT a trailing
+  # newline, so `cat v4 v6` fuses the last IPv4 range onto the first IPv6 one
+  # ("131.0.72.0/222400:cb00::/32") -- ufw rejects that with "Bad source
+  # address", and the unterminated final line is dropped by the read loop
+  # entirely. The visible symptom is a failed provision; the dangerous one is
+  # a silently incomplete allowlist, where some Cloudflare edge nodes cannot
+  # reach the origin and a fraction of visitors get 5xx. Observed live.
+  awk 1 "$tmp_v4" "$tmp_v6" | grep -vE '^[[:space:]]*$' > "$dest"
+
+  local count
+  count="$(wc -l < "$dest" | tr -d ' ')"
+  [ "$count" -ge 10 ] || die "expected at least 10 Cloudflare ranges, got $count -- refusing to install a partial allowlist."
+  info "collected $count Cloudflare ranges"
 }
 
 configure_firewall() {
@@ -290,7 +329,7 @@ configure_firewall() {
   # rather than accumulating duplicates on re-run.
   if [ -s "$CF_RANGES_STATE_FILE" ]; then
     info "removing Cloudflare firewall rules from a previous run"
-    while IFS= read -r cidr; do
+    while IFS= read -r cidr || [ -n "$cidr" ]; do
       [ -n "$cidr" ] || continue
       ufw delete allow from "$cidr" to any port 80 proto tcp >/dev/null 2>&1 || true
       ufw delete allow from "$cidr" to any port 443 proto tcp >/dev/null 2>&1 || true
@@ -298,7 +337,7 @@ configure_firewall() {
   fi
 
   info "allowing 80/443 from current Cloudflare ranges only"
-  while IFS= read -r cidr; do
+  while IFS= read -r cidr || [ -n "$cidr" ]; do
     [ -n "$cidr" ] || continue
     ufw allow from "$cidr" to any port 80 proto tcp comment 'cloudflare' >/dev/null
     ufw allow from "$cidr" to any port 443 proto tcp comment 'cloudflare' >/dev/null

@@ -191,3 +191,32 @@ all_scripts() {
   run grep -q "chmod 644" "$REPO/deploy.sh"
   [ "$status" -eq 0 ]
 }
+
+@test "provision.sh waits for the dpkg lock before installing packages" {
+  # Fresh Ubuntu cloud images run unattended-upgrades on first boot, holding
+  # the dpkg lock for minutes. Without a wait, provisioning a brand-new
+  # Droplet fails on a race unrelated to the script, and apt's error gives no
+  # hint that waiting is the fix. Observed on a real 24.04 Droplet.
+  run grep -q "wait_for_dpkg_lock" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+
+  wait_def="$(grep -n '^wait_for_dpkg_lock()' "$REPO/provision.sh" | head -1 | cut -d: -f1)"
+  apt_line="$(grep -n 'apt-get install' "$REPO/provision.sh" | head -1 | cut -d: -f1)"
+  [ -n "$wait_def" ]
+  [ -n "$apt_line" ]
+  [ "$wait_def" -lt "$apt_line" ]
+}
+
+@test "verify-deploy.sh runs on bash 3.2 without unbound-variable errors" {
+  # macOS ships bash 3.2, where `set -u` treats an EMPTY array expanded as
+  # "${arr[@]}" as unbound and aborts. That made every check in this script
+  # fail with "unbound variable" when run from a Mac. Behavioral test rather
+  # than a grep, because the safe idiom ${arr[@]+"${arr[@]}"} legitimately
+  # contains the unsafe-looking form inside it.
+  #
+  # Port 1 refuses instantly, so every check fails fast -- we only care that
+  # it fails as a *check*, not as a shell error.
+  run "$REPO/verify-deploy.sh" "http://127.0.0.1:1"
+  run bash -c "printf '%s' \"$output\" | grep -c 'unbound variable' || true"
+  [ "$output" = "0" ]
+}
