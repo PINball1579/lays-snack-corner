@@ -130,3 +130,32 @@ test('the CTA still works with GTM present', async ({ page }) => {
   expect(response.status()).toBe(302);
   expect(response.headers()['location']).toBe('https://www.instagram.com/laysthailand');
 });
+
+test('a click on the button targets the anchor, not the inner image', async ({ page }) => {
+  // GTM's Click ID / Click Classes report the element actually clicked. The
+  // button is an <img> inside an <a>, so without pointer-events:none on the
+  // image the click target is the image -- whose id and class are empty --
+  // and a GTM trigger on #btn-add-template would silently never fire.
+  await page.goto('/');
+
+  const target = await page.evaluate(async () => {
+    const cta = document.querySelector('a.cta') as HTMLElement;
+    const r = cta.getBoundingClientRect();
+    const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { tag: el?.tagName, id: el?.id, cls: (el as HTMLElement)?.className };
+  });
+
+  expect(target.tag).toBe('A');
+  expect(target.id).toBe('btn-add-template');
+  expect(target.cls).toContain('btn-add-template');
+});
+
+test('the CTA exposes stable GTM hooks', async ({ page }) => {
+  await page.goto('/');
+  const cta = page.locator('a#btn-add-template');
+
+  await expect(cta).toHaveAttribute('href', '/go');
+  await expect(cta).toHaveAttribute('data-gtm-label', 'add-template');
+  await expect(cta).toHaveClass(/btn-add-template/);
+  await expect(cta).toHaveCount(1);
+});

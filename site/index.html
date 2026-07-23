@@ -48,7 +48,14 @@
     <img class="badge" src="assets/logo-mtr.png" alt="มตล ใหม่ ต้องลอง — Snack Corner"
          width="472" height="274">
 
-    <a class="cta" href="/go" aria-label="Add your template">
+    <!-- id and class are GTM click-trigger hooks. The inner <img> is
+         pointer-events:none (see style.css) so the click always registers on
+         this anchor, making Click ID / Click Classes reliable. -->
+    <a class="cta btn-add-template"
+       id="btn-add-template"
+       data-gtm-label="add-template"
+       href="/go"
+       aria-label="Add your template">
       <img src="assets/btn-add-template.png" alt="" width="913" height="280">
     </a>
   </main>

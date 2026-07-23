@@ -103,6 +103,13 @@ body {
   display: block;
   width: 100%;
   height: auto;
+
+  /* Clicks pass through to the parent <a>. Without this, a tap lands on the
+     <img>, and GTM's Click ID / Click Classes report the image's (empty)
+     attributes instead of the anchor's -- so a trigger on #btn-add-template
+     would never fire. Purely an analytics concern; navigation works either
+     way because the anchor wraps the image. */
+  pointer-events: none;
 }
 
 .cta:active {
