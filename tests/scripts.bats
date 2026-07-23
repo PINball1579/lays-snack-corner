@@ -155,3 +155,23 @@ all_scripts() {
   run grep -q "sshd -t" "$REPO/provision.sh"
   [ "$status" -eq 0 ]
 }
+
+@test "provision.sh enables ufw IPv6 filtering before adding rules" {
+  # ufw accepts IPv6 allow rules and reports success even when IPV6=no, in
+  # which case v6 traffic is not filtered at all. The Droplet has a public
+  # IPv6 address, so an unfiltered v6 path bypasses the Cloudflare lockdown
+  # entirely.
+  run grep -q "IPV6=yes" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+
+  ipv6_line="$(grep -n 'IPV6=yes' "$REPO/provision.sh" | head -1 | cut -d: -f1)"
+  enable_line="$(grep -n 'ufw --force enable' "$REPO/provision.sh" | head -1 | cut -d: -f1)"
+  [ -n "$ipv6_line" ]
+  [ -n "$enable_line" ]
+  [ "$ipv6_line" -lt "$enable_line" ]
+}
+
+@test "provision.sh verifies IPv6 rules landed after enabling ufw" {
+  run grep -q "(v6)" "$REPO/provision.sh"
+  [ "$status" -eq 0 ]
+}

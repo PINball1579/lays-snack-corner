@@ -256,6 +256,20 @@ configure_firewall() {
   # script only hits Cloudflare's IP-list endpoints once per run).
   local new_ranges="$1"
 
+  # ufw silently ignores every IPv6 rule unless this is set. Ubuntu 24.04
+  # defaults to yes, but resting a security control on a distro default is how
+  # a future image change quietly leaves the origin reachable over IPv6 with no
+  # firewall at all -- while `ufw allow ... from <v6 cidr>` still reports
+  # success. The Droplet has a public IPv6 address, so this is not theoretical.
+  info "ensuring ufw filters IPv6"
+  if grep -qE '^IPV6=' /etc/default/ufw; then
+    sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw
+  else
+    printf 'IPV6=yes\n' >> /etc/default/ufw
+  fi
+  grep -qE '^IPV6=yes' /etc/default/ufw \
+    || die "could not enable IPv6 filtering in /etc/default/ufw; refusing to continue with an unfiltered IPv6 origin."
+
   info "setting default-deny-incoming / allow-outgoing policy"
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
@@ -294,6 +308,13 @@ configure_firewall() {
 
   info "enabling ufw"
   ufw --force enable >/dev/null
+
+  # Prove the v6 rules actually landed rather than trusting that they did.
+  # If IPv6 filtering silently failed, the origin is exposed over IPv6 and
+  # the operator would have no way to notice until someone found the address.
+  if ! ufw status | grep -q '(v6)'; then
+    die "ufw is active but shows no IPv6 rules -- the origin may be reachable over IPv6 without filtering. Check 'IPV6=yes' in /etc/default/ufw and re-run."
+  fi
 }
 
 # --- Unattended upgrades -------------------------------------------------
