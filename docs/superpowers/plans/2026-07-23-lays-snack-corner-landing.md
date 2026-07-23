@@ -6,7 +6,7 @@
 
 **Architecture:** Static `index.html` + `style.css` render three images over a full-bleed background using flexbox, sized from ratios measured off the 1080×1920 design. The CTA links to `/go`, which Apache rewrites to `go.php` — ~30 lines of PHP that read the destination from a server-side `link.txt` and issue a `302`. `set-link.sh` validates a URL, writes it locally and remotely over SSH, and verifies the live redirect. No build step, no bundler, no JavaScript in the page.
 
-**Tech Stack:** HTML5, CSS3 (flexbox, `clamp()`, `svh`, `env(safe-area-inset-*)`), PHP 8 (one file), Bash, Apache `.htaccess`. Tests: `bats` 1.13 (unit) and `@playwright/test` 1.61 (smoke + visual). Hosting: Cloudways PHP Stack. Edge: Cloudflare with an Origin Certificate.
+**Tech Stack:** HTML5, CSS3 (flexbox, `clamp()`, `svh`, `env(safe-area-inset-*)`), PHP 8.3-FPM (one file), Bash, Apache 2.4 `.htaccess`. Tests: `bats` 1.13 (unit) and `@playwright/test` 1.61 (smoke + visual). Hosting: a bare DigitalOcean Droplet (Ubuntu 24.04), provisioned by `provision.sh` — originally planned as Cloudways, changed 2026-07-23 (see Task 5/6 below and the design spec §9.0). Edge: Cloudflare with an Origin Certificate, origin locked to Cloudflare's IP ranges.
 
 ## Global Constraints
 
@@ -1055,383 +1055,295 @@ git commit -m "feat: build landing page layout with smoke and visual tests"
 
 ---
 
-### Task 5: `.htaccess`, deploy to Cloudways, verify the origin
+### Task 5: `.htaccess`, deploy/provision/verify scripts, local Apache verification
 
-Everything so far runs locally. This task puts it on the server and proves the two things that cannot be tested locally: the Apache rewrite and the cache headers.
+> **Hosting change (2026-07-23):** this task originally targeted Cloudways. The
+> campaign ships on a bare DigitalOcean Droplet instead — see
+> `docs/superpowers/specs/2026-07-23-lays-snack-corner-landing-design.md` §9.0 for the
+> decision and rationale. `deploy.sh` below is the DigitalOcean-retargeted version;
+> `provision.sh` and `verify-deploy.sh` are new, added by this hosting change and not
+> part of the original task scope. **This task is complete** — all of it runs and is
+> verified locally (`tests/htaccess.bats` against real Apache 2.4.66,
+> `tests/scripts.bats` for config-lint checks on the scripts themselves); nothing in
+> it depends on a provisioned server existing yet. Task 6 covers the parts that do.
+
+Everything through Task 4 runs locally against PHP's built-in dev server, which has no
+`.htaccess`. This task adds the pieces needed to run for real — the Apache rewrite, the
+cache headers, the provisioning script, the deploy script, and a post-deploy checklist —
+and proves the parts that can be proven without a live server: `.htaccess` against a real
+local Apache instance, and the scripts themselves via config-lint tests.
 
 **Files:**
 - Create: `site/.htaccess`
 - Create: `deploy.sh`
-- Modify: `.gitignore`
+- Create: `provision.sh`
+- Create: `verify-deploy.sh`
 - Create: `.env.deploy.example`
+- Create: `tests/htaccess.bats`
+- Create: `tests/scripts.bats`
+- Modify: `.gitignore`
 
 **Interfaces:**
 - Consumes: all of `site/` from Tasks 1–4
 - Produces:
   - `site/.htaccess` — rewrites `/go` to `go.php`, sets cache headers, denies direct access to `link.txt`
-  - `./deploy.sh` — rsyncs `site/` to the server
+  - `./provision.sh` — one-time (re-runnable) root setup of a fresh Ubuntu 24.04 Droplet: Apache 2.4 + PHP 8.3-FPM, the vhost (apex canonical, `www` redirects), the Cloudflare Origin Certificate, and a `ufw` firewall locked to Cloudflare's current IP ranges
+  - `./deploy.sh` — rsyncs `site/` to the Droplet's document root, excluding `link.txt`
+  - `./verify-deploy.sh <base-url>` — runs the full post-deploy checklist against either the public domain or the raw origin IP
   - `.env.deploy` (untracked) — holds `LAYS_REMOTE_HOST`, `LAYS_REMOTE_PATH`, `LAYS_SITE_URL`
 
-- [ ] **Step 1: Write `.htaccess`**
+- [x] **Step 1: Write `.htaccess`**
 
-Create `site/.htaccess`:
+`site/.htaccess` — rewrites `/go` to `go.php`, denies direct access to `link.txt`, sets
+the three-tier cache policy (`assets/*` cached a year immutable, `.html`/`.css`
+`no-cache`), and disables directory listings. Unchanged by the hosting move — see the
+next step for why that matters.
 
-```apache
-# Lay's มตล Snack Corner
+- [x] **Step 2: Verify `.htaccess` against real Apache locally**
 
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-
-  # Stable public CTA endpoint. The href in index.html is /go and never changes.
-  RewriteRule ^go/?$ go.php [L]
-</IfModule>
-
-# link.txt is config, not content. Not secret, but there is no reason to serve
-# the raw file and invite polling.
-<Files "link.txt">
-  Require all denied
-</Files>
-
-<IfModule mod_headers.c>
-  # Fingerprint-free assets, changed only by filename. Safe to cache forever.
-  <FilesMatch "\.(png|jpg|jpeg|gif|webp|svg|ico|woff2)$">
-    Header set Cache-Control "public, max-age=31536000, immutable"
-  </FilesMatch>
-
-  # Markup and styles must be revalidated so copy edits go live immediately.
-  <FilesMatch "\.(html|css)$">
-    Header set Cache-Control "no-cache"
-  </FilesMatch>
-
-  Header always set X-Content-Type-Options "nosniff"
-  Header always set X-Frame-Options "SAMEORIGIN"
-  Header always set Referrer-Policy "strict-origin-when-cross-origin"
-</IfModule>
-
-DirectoryIndex index.html
-
-# Never expose a directory listing.
-Options -Indexes
-```
-
-- [ ] **Step 2: Write the deploy script**
-
-Create `deploy.sh`:
+`tests/htaccess.bats` starts a real local Apache 2.4 instance (not PHP's built-in dev
+server) against a copy of `site/`, and asserts every behavior above through it,
+including the one thing a hand-rolled PHP router cannot prove: that `RewriteRule
+^go/?$ go.php [L]` for `/go/` (trailing slash) is evaluated before `mod_dir`'s
+`DirectorySlash` handling, not after.
 
 ```bash
-#!/usr/bin/env bash
-#
-# Deploy site/ to the Cloudways application root.
-#
-#   ./deploy.sh
-#
-# Reads LAYS_REMOTE_HOST and LAYS_REMOTE_PATH from .env.deploy.
-
-set -euo pipefail
-
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-if [ -f "$REPO_ROOT/.env.deploy" ]; then
-  # shellcheck disable=SC1091
-  . "$REPO_ROOT/.env.deploy"
-fi
-
-die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-
-[ -n "${LAYS_REMOTE_HOST:-}" ] || die "LAYS_REMOTE_HOST is not set (see .env.deploy.example)"
-[ -n "${LAYS_REMOTE_PATH:-}" ] || die "LAYS_REMOTE_PATH is not set (see .env.deploy.example)"
-
-rsync -avz --delete \
-  --exclude '.DS_Store' \
-  --exclude 'link.txt' \
-  "$REPO_ROOT/site/" \
-  "$LAYS_REMOTE_HOST:$LAYS_REMOTE_PATH/"
-
-printf 'deployed site/ -> %s:%s/\n' "$LAYS_REMOTE_HOST" "$LAYS_REMOTE_PATH"
+npx bats tests/htaccess.bats
 ```
 
-`link.txt` is excluded deliberately: it is operator state, not build output.
-`set-link.sh`, not `deploy.sh`, owns the live value of `link.txt` on the
-server. Without this exclusion, any deploy from a clean clone or CI —
-including one that has nothing to do with today's link — would `rsync
---delete` the live CTA destination back to whatever value happens to be
-committed in the repo, silently reverting the day's change with no error
-anywhere. Separately, `rsync -a` (implied by `-avz`) preserves file modes
-from the source, so `site/link.txt` in the local working tree must stay
-`644` — a repo-committed `600` would propagate to any fresh deploy target
-that doesn't already have the file (e.g. a first-time deploy, or one where
-this exclusion is later removed by someone who hasn't read this note).
+Expected: `1..7`, all `ok`. This result — confirmed against real Apache 2.4.66 — is
+exactly what makes it safe to move hosts without touching `.htaccess`: Apache is the
+constant, and only the box underneath it changed.
+
+- [x] **Step 3: Write `provision.sh`**
+
+One-time (safely re-runnable) root provisioning for a fresh Ubuntu 24.04 Droplet.
+Installs `apache2`, `php8.3-fpm`, `ufw`; enables `rewrite headers ssl proxy_fcgi
+setenvif remoteip`; creates the document root; installs the Cloudflare Origin
+Certificate from `/root/cloudflare-origin.{pem,key}`; writes the vhost with
+`AllowOverride All` (§9.0/§9.4 of the design spec — without it `.htaccess` is silently
+ignored); configures `mod_remoteip` so access logs show real visitor IPs; fetches
+Cloudflare's current IPv4/IPv6 ranges and locks `ufw` to allow 80/443 from those ranges
+only, adding the SSH allow rule *before* enabling `ufw` (getting that ordering wrong
+permanently locks out the operator); enables unattended upgrades; and refuses to reload
+Apache if `apache2ctl configtest` fails.
 
 ```bash
-chmod +x deploy.sh
+sudo ./provision.sh
 ```
 
-- [ ] **Step 3: Create the deployment config template**
+(Run against a real Droplet in Task 6 — see there for expected output.)
 
-Create `.env.deploy.example`:
+- [x] **Step 4: Write the deploy script**
+
+`deploy.sh` rsyncs `site/` to the Droplet's document root (`/var/www/laysmortorlor.com`,
+matching `provision.sh`'s `DOCROOT`), excluding `link.txt` (operator state owned by
+`set-link.sh`, not build output — an unexcluded `--delete` sync would silently revert
+the live CTA to whatever is committed), forcing sane file modes
+(`--chmod=D755,F644`) regardless of the deploying machine's local permissions, and then
+SSHes in afterward to confirm/fix `link.txt`'s mode specifically (a `600` `link.txt` is
+unreadable by `www-data` and makes every visitor silently get the fallback URL, with no
+error in any log).
 
 ```bash
-# Copy to .env.deploy and fill in. .env.deploy is gitignored — it holds
-# server credentials and must never be committed.
-#
-# Find these in Cloudways: Servers -> Master Credentials (host, username)
-# and Application -> Application Settings (the public_html path).
-
-LAYS_REMOTE_HOST="master_USERNAME@SERVER_IP"
-LAYS_REMOTE_PATH="/home/master_USERNAME/applications/APP_NAME/public_html"
-LAYS_SITE_URL="https://REPLACE-WITH-DOMAIN.example.com"
+chmod +x deploy.sh   # already executable in the committed file; re-run is a no-op
 ```
 
-- [ ] **Step 4: Gitignore the real config**
+- [x] **Step 5: Write `verify-deploy.sh`**
 
-Append to `.gitignore`:
-
-```
-.env.deploy
-```
-
-- [ ] **Step 5: Provision the Cloudways application**
-
-In the Cloudways console:
-
-1. **Launch a server** — smallest tier is sufficient for a static page. Provider and region: pick the region closest to the campaign audience (Singapore for Thailand).
-2. **Application type: PHP Stack.** Not WordPress, not Laravel. The PHP Stack's `public_html/` is a plain document root.
-3. Once provisioned, open **Servers → Master Credentials** and note the public IP, SSH username, and password.
-4. Open **Application → Application Settings** and note the full `public_html` path.
-
-- [ ] **Step 6: Confirm SSH access**
+Post-deploy checklist. Runs every documented behavior against a `<base-url>` argument —
+`/` 200, `/go` and `/go/` both 302 (never 301) to the current `site/link.txt` contents,
+`/link.txt` 403, asset cache-forever headers, `/` `no-cache`, `/go` `no-store` plus
+`cf-cache-status: BYPASS`, the `http://`→`https://` upgrade, the `www`→apex redirect, no
+`/assets/` directory listing — and exits non-zero if any fail. Works against the public
+domain or a raw origin IP (TLS verification is relaxed for the IP case, since the
+Cloudflare Origin Certificate doesn't match a bare IP; the `cf-cache-status` check is
+skipped, not failed, in that mode, since Cloudflare isn't in front of the request).
 
 ```bash
-cp .env.deploy.example .env.deploy
-# Edit .env.deploy with the real values from step 5, then:
-. ./.env.deploy && ssh "$LAYS_REMOTE_HOST" 'echo connected; pwd'
+./verify-deploy.sh https://laysmortorlor.com     # through Cloudflare
+./verify-deploy.sh https://<droplet-ip>          # raw origin, bypassing Cloudflare
 ```
 
-Expected: `connected` followed by the home directory path.
+(Run against a real Droplet in Task 6 — see there for expected output.)
 
-If password authentication is tedious, add your key now — every later step is smoother for it:
+- [x] **Step 6: Create the deployment config template**
+
+`.env.deploy.example` — SSH target is the Droplet's IP directly (`root@YOUR_DROPLET_IP`,
+found on the Droplet's page in the DigitalOcean control panel), the document root is
+`provision.sh`'s `DOCROOT`, and the site URL is the apex (`https://laysmortorlor.com` —
+canonical; `www` redirects to it, the reverse of the usual convention). No
+Cloudways-style master/application account exists here.
+
+- [x] **Step 7: Gitignore the real config**
+
+`.env.deploy` appended to `.gitignore` — it holds real SSH credentials and must never be
+committed.
+
+- [x] **Step 8: Write the config-lint tests**
+
+`tests/scripts.bats` — checks every top-level script (`provision.sh`, `deploy.sh`,
+`verify-deploy.sh`, `set-link.sh`) exists, passes `bash -n`, is executable, and has the
+right shebang; specifically pins the two failure modes that are otherwise invisible
+until production: `provision.sh` adding the SSH allow rule *before* `ufw --force
+enable` (by line number, not just string presence), and `AllowOverride All` being
+present. Also asserts `provision.sh` never opens 80/443 to `0.0.0.0/0` or a bare `any`,
+only to the fetched Cloudflare CIDR ranges, and aborts (rather than falling back) if the
+Cloudflare IP-range fetch fails or fails validation.
 
 ```bash
-ssh-copy-id "$LAYS_REMOTE_HOST"
+npx bats tests/scripts.bats
 ```
 
-- [ ] **Step 7: Deploy**
+Expected: all tests `ok`, 0 failures.
+
+- [x] **Step 9: Run the full suite**
 
 ```bash
-./deploy.sh
+npm test
 ```
 
-Expected: rsync lists the transferred files and prints the destination.
+Expected: PASS — 71 bats tests (across `assets.bats`, `go.bats`, `set-link.bats`,
+`htaccess.bats`, `scripts.bats`) and 11 Playwright tests, exit code 0.
 
-- [ ] **Step 8: Verify the origin over plain HTTP**
-
-Cloudways gives every application a temporary URL of the form
-`https://phpstack-XXXXX-XXXXXXX.cloudwaysapps.com`. Use it before the domain exists.
+- [x] **Step 10: Commit**
 
 ```bash
-ORIGIN="https://phpstack-XXXXX-XXXXXXX.cloudwaysapps.com"   # from Cloudways
-
-# 1. The page is served
-curl -sS -o /dev/null -w 'index: %{http_code}\n' "$ORIGIN/"
-
-# 2. The rewrite works and returns 302 (this is the part that cannot be tested locally)
-curl -sS -o /dev/null -w 'go: %{http_code} -> %{redirect_url}\n' "$ORIGIN/go"
-
-# 3. link.txt is not directly readable
-curl -sS -o /dev/null -w 'link.txt: %{http_code}\n' "$ORIGIN/link.txt"
-
-# 4. Asset caching is long-lived
-curl -sSI "$ORIGIN/assets/bg.png" | tr -d '\r' | grep -i '^cache-control'
-
-# 5. Markup is revalidated
-curl -sSI "$ORIGIN/" | tr -d '\r' | grep -i '^cache-control'
-
-# 6. The redirect is not cacheable
-curl -sSI "$ORIGIN/go" | tr -d '\r' | grep -i '^cache-control'
-```
-
-Expected:
-
-```
-index: 200
-go: 302 -> https://www.lays.co.th/
-link.txt: 403
-cache-control: public, max-age=31536000, immutable
-cache-control: no-cache
-cache-control: no-store, no-cache, must-revalidate, max-age=0
-```
-
-If `go` returns `404`, `mod_rewrite` is not picking up `.htaccess` — confirm the file transferred (`ssh "$LAYS_REMOTE_HOST" 'ls -la $LAYS_REMOTE_PATH'`; rsync skips no dotfiles here, but a local `.htaccess` typo will silently 500).
-
-If `link.txt` returns `200`, `mod_authz_core` syntax is not being honored — replace the `<Files>` block with `Order allow,deny` / `Deny from all` for Apache 2.2.
-
-- [ ] **Step 9: Commit**
-
-```bash
-git add site/.htaccess deploy.sh .env.deploy.example .gitignore
-git commit -m "feat: add htaccess rewrite, cache headers, and deploy script"
+git add site/.htaccess deploy.sh provision.sh verify-deploy.sh .env.deploy.example \
+  tests/htaccess.bats tests/scripts.bats .gitignore
+git commit -m "feat: provision DigitalOcean Droplet and retarget deploy scripts"
 ```
 
 ---
 
-### Task 6: Domain, Cloudflare SSL, and go-live
+### Task 6: Droplet, DNS, Cloudflare, and go-live
 
-Resolves the two deferred values, puts Cloudflare in front with an Origin Certificate, and proves the daily-update loop works end to end against the live site.
+Puts a real Ubuntu 24.04 Droplet behind Cloudflare, proves the parts of Task 5 that
+cannot be proven without one, and confirms the daily-update loop works end to end
+against the live site.
+
+**Already done, ahead of this task's remaining steps** (both shipped as part of
+resolving the design spec's deferred values — see §12 of the design doc — independent
+of which host was chosen):
+- [x] Real domain (`laysmortorlor.com`, apex canonical) substituted into `site/index.html`'s Open Graph tags
+- [x] `FALLBACK_URL` in `site/go.php` set to `https://www.instagram.com/laysthailand`, and the corresponding `tests/go.bats` fallback assertions updated to match
 
 **Files:**
-- Modify: `site/index.html` (the two Open Graph URLs)
-- Modify: `site/go.php` (`FALLBACK_URL`)
-- Modify: `.env.deploy`
-- Create: `docs/RUNBOOK.md`
+- Modify: `.env.deploy` (untracked — filled in with real values)
 
 **Interfaces:**
-- Consumes: the deployed application from Task 5
-- Produces: a live HTTPS site, and a working `./set-link.sh <url>` against production
+- Consumes: `provision.sh`, `deploy.sh`, `verify-deploy.sh` from Task 5
+- Produces: a live HTTPS site on a DigitalOcean Droplet, and a working `./set-link.sh <url>` against production
 
-- [ ] **Step 1: Add the domain in Cloudways**
+**Status: blocked.** Every step below requires a real DigitalOcean account, a real
+Cloudflare zone for `laysmortorlor.com`, and a physical iPhone/Android — none of which
+exist in this environment. Nothing below has been run against a real host.
 
-**Application → Domain Management** → set the real domain as the **Primary Domain**. Add the `www` variant as an alias if it will be used.
+- [ ] **Step 1: Create the Droplet**
 
-- [ ] **Step 2: Point DNS at the server through Cloudflare**
+DigitalOcean console → **Create → Droplets**. Image: **Ubuntu 24.04 (LTS) x64**.
+Size: smallest tier is sufficient for a static page. Region: closest to the campaign
+audience (Singapore for Thailand). Authentication: SSH key, not password.
 
-In the Cloudflare dashboard for the domain:
+Expected: a Droplet with a public IPv4 address, reachable via `ssh root@<droplet-ip>`.
+
+- [ ] **Step 2: Point DNS at the Droplet through Cloudflare**
+
+In the Cloudflare dashboard for `laysmortorlor.com`:
 
 | Type | Name | Content | Proxy |
 |---|---|---|---|
-| A | `@` | Cloudways server IP | Proxied (orange) |
-| A | `www` | Cloudways server IP | Proxied (orange) |
+| A | `@` | Droplet IP | Proxied (orange) |
+| A | `www` | Droplet IP | Proxied (orange) |
 
-- [ ] **Step 3: Generate and install a Cloudflare Origin Certificate**
+Apex is canonical here — double check the `@` record, not `www`, is the one campaign
+traffic is expected to land on; this is the reverse of the usual setup and easy to get
+backwards.
 
-1. Cloudflare → **SSL/TLS → Origin Server → Create Certificate**
-2. Private key type RSA (2048), hostnames `example.com` and `*.example.com`, validity **15 years**
-3. Copy the **Origin Certificate** and the **Private Key** — the private key is shown exactly once
-4. Cloudways → **Application → SSL Certificate → Custom SSL** → paste both → **Save**
+- [ ] **Step 3: Generate the Cloudflare Origin Certificate**
 
-An Origin Certificate is used instead of Let's Encrypt because LE's HTTP-01 validation and its 90-day auto-renew can both fail behind Cloudflare's proxy unless `/.well-known/` is excluded from caching. This removes that failure mode for the campaign's lifetime.
+Cloudflare → **SSL/TLS → Origin Server → Create Certificate**. Private key type RSA
+(2048), hostnames `laysmortorlor.com` and `*.laysmortorlor.com`, validity **15 years**.
+Copy the **Origin Certificate** and the **Private Key** — the private key is shown
+exactly once.
 
-- [ ] **Step 4: Set the Cloudflare SSL mode and HTTPS behavior**
-
-1. **SSL/TLS → Overview → Full (strict)**
-2. **SSL/TLS → Edge Certificates → Always Use HTTPS: On**
-3. **SSL/TLS → Edge Certificates → Automatic HTTPS Rewrites: On**
-4. **SSL/TLS → Edge Certificates → Minimum TLS Version: 1.2**
-
-`Flexible` mode must not be used — it leaves the Cloudflare-to-origin hop unencrypted.
-
-- [ ] **Step 5: Add the cache-bypass rule for `/go`**
-
-**Caching → Cache Rules → Create rule**
-
-- Rule name: `Bypass cache for /go`
-- When incoming requests match: `URI Path` `equals` `/go`
-- Then: **Bypass cache**
-- Deploy
-
-Without this, Cloudflare will serve yesterday's destination for hours regardless of what `go.php` returns.
-
-- [ ] **Step 6: Substitute the real domain into the markup**
+- [ ] **Step 4: Place the certificate and key on the Droplet**
 
 ```bash
-DOMAIN="example.com"   # the real domain, no scheme
-sed -i '' "s/REPLACE-WITH-DOMAIN.example.com/$DOMAIN/g" site/index.html
-grep -c "REPLACE-WITH-DOMAIN" site/index.html
+scp origin-cert.pem root@<droplet-ip>:/root/cloudflare-origin.pem
+scp origin-key.pem  root@<droplet-ip>:/root/cloudflare-origin.key
 ```
 
-Expected: `0`.
+`provision.sh` refuses to run (Step 5) if either file is missing or empty at those exact
+paths.
 
-- [ ] **Step 7: Set the real fallback URL**
-
-If a permanent campaign or brand page exists, it is a better destination than the site's own root when `link.txt` is unreadable. Edit `site/go.php`:
-
-```php
-const FALLBACK_URL = 'https://www.lays.co.th/';
-```
-
-If no such page exists, leave `'/'` as-is and skip to step 8.
-
-- [ ] **Step 8: Update the `go.php` fallback expectations in the tests**
-
-If step 7 changed `FALLBACK_URL`, the four fallback assertions in `tests/go.bats` must change with it. Replace `[ "$output" = "302 $BASE/" ]` with the new absolute URL in the tests named:
-
-- `missing link.txt falls back instead of erroring`
-- `empty link.txt falls back`
-- `whitespace-only link.txt falls back`
-- `malformed link.txt falls back`
-- `non-TLS http:// destination is refused and falls back`
-- `javascript: scheme is refused and falls back`
-
-For example:
+- [ ] **Step 5: Run `provision.sh`**
 
 ```bash
-  [ "$output" = "302 https://www.lays.co.th/" ]
+ssh root@<droplet-ip>
+# on the Droplet:
+git clone <this-repo> lays && cd lays   # or: scp/rsync provision.sh over on its own
+sudo ./provision.sh
 ```
 
-Then:
+Expected: a sequence of `==>` progress lines ending in
+`provisioning complete: https://laysmortorlor.com`, with `apache2ctl configtest`
+passing and both `apache2` and `php8.3-fpm` restarted. If the origin certificate is
+missing, `provision.sh` exits before touching Apache or `ufw` at all, with a message
+naming the exact path it expected.
+
+- [ ] **Step 6: Deploy**
+
+From the local repo (not the Droplet):
 
 ```bash
-npm run test:unit
-```
-
-Expected: PASS — 31 tests, 0 failures.
-
-- [ ] **Step 9: Redeploy and complete the deployment config**
-
-```bash
+cp .env.deploy.example .env.deploy
+# edit .env.deploy: LAYS_REMOTE_HOST=root@<droplet-ip>
 ./deploy.sh
 ```
 
-Edit `.env.deploy` so `LAYS_SITE_URL` holds the real origin:
+Expected: rsync's file list, then
+`deployed site/ -> root@<droplet-ip>:/var/www/laysmortorlor.com/`, then
+`verified: link.txt mode is sane on root@<droplet-ip>`.
+
+- [ ] **Step 7: Verify the deploy**
 
 ```bash
-LAYS_SITE_URL="https://example.com"
+./verify-deploy.sh "https://<droplet-ip>"   # raw origin, bypassing Cloudflare first
 ```
 
-- [ ] **Step 10: Verify the live site through the edge**
+Expected: every check `[PASS]` except `GET /go carries cf-cache-status: BYPASS`, which
+`[SKIP]`s in raw-IP mode (Cloudflare isn't in front of this request yet — DNS may not
+even be proxied at this point). Ending line: `11 passed, 0 failed, 1 skipped`.
+
+If `GET /go returns 302` fails with a 404, `AllowOverride All` is not in effect — see
+the runbook's troubleshooting section.
+
+- [ ] **Step 8: Set the Cloudflare SSL mode and add the cache-bypass rule**
+
+1. **SSL/TLS → Overview → Full (strict).** Never Flexible — it leaves the
+   Cloudflare-to-origin hop unencrypted despite the Origin Certificate from Step 3.
+2. **SSL/TLS → Edge Certificates → Always Use HTTPS: On**
+3. **SSL/TLS → Edge Certificates → Automatic HTTPS Rewrites: On**
+4. **Caching → Cache Rules → Create rule** — name `Bypass cache for /go`, when incoming
+   requests match `URI Path` `equals` `/go`, then **Bypass cache**, **Deploy**.
+
+Then re-verify through the edge:
 
 ```bash
-SITE="https://example.com"
-
-# TLS terminates at Cloudflare and the page is served
-curl -sS -o /dev/null -w 'index: %{http_code}\n' "$SITE/"
-
-# HTTP is upgraded, not served
-curl -sS -o /dev/null -w 'http->https: %{http_code} -> %{redirect_url}\n' "http://example.com/"
-
-# The redirect still works and is still a 302 through the edge
-curl -sS -o /dev/null -w 'go: %{http_code} -> %{redirect_url}\n' "$SITE/go"
-
-# The redirect is not cached at the edge
-curl -sSI "$SITE/go" | tr -d '\r' | grep -iE '^(cache-control|cf-cache-status)'
-
-# link.txt is still denied
-curl -sS -o /dev/null -w 'link.txt: %{http_code}\n' "$SITE/link.txt"
-
-# Assets are being cached by the edge
-curl -sSI "$SITE/assets/bg.png" | tr -d '\r' | grep -iE '^(cache-control|cf-cache-status)'
+./verify-deploy.sh https://laysmortorlor.com
 ```
 
-Expected:
+Expected: `11 passed, 0 failed, 0 skipped` — `cf-cache-status: BYPASS` on `/go` now
+passes for real. If it reads `HIT` or `DYNAMIC` instead, the cache rule above is not
+matching and the daily update will not take effect for visitors even though `go.php`
+itself is correct.
 
-```
-index: 200
-http->https: 301 -> https://example.com/
-go: 302 -> https://www.lays.co.th/
-cache-control: no-store, no-cache, must-revalidate, max-age=0
-cf-cache-status: BYPASS
-link.txt: 403
-cache-control: public, max-age=31536000, immutable
-cf-cache-status: HIT
-```
-
-`cf-cache-status: BYPASS` on `/go` is the single most important line here. If it reads `HIT` or `DYNAMIC`, the cache rule from step 5 is not matching and the daily update will not take effect for visitors.
-
-- [ ] **Step 11: Prove the daily update loop end to end**
+- [ ] **Step 9: Prove the daily update loop end to end**
 
 ```bash
 . ./.env.deploy
 export LAYS_REMOTE_HOST LAYS_REMOTE_PATH LAYS_SITE_URL
-
 ./set-link.sh https://www.example.com/campaign-day-1
 ```
 
@@ -1439,25 +1351,20 @@ Expected:
 
 ```
 local   : /Users/.../lay's/site/link.txt
-remote  : master_xxx@203.0.113.10:/home/.../public_html/link.txt
-verified: https://example.com/go -> https://www.example.com/campaign-day-1
+reminder: site/link.txt has changed -- commit it, or a future redeploy will revert the live link
+remote  : root@<droplet-ip>:/var/www/laysmortorlor.com/link.txt
+verified: https://laysmortorlor.com/go -> https://www.example.com/campaign-day-1
 ```
 
-The `verified:` line means the change is live. If it fails, the URL was written but the edge is still serving the old value — recheck step 5.
+The `verified:` line means the change is live at the edge. If it fails, the URL was
+written but Cloudflare is still serving the old value — recheck Step 8's cache rule.
+Commit the changed `site/link.txt` per the reminder line.
 
-- [ ] **Step 12: Run the full suite against the built site**
+- [ ] **Step 10: Manual device pass**
 
-```bash
-npm test
-```
-
-Expected: PASS — 31 bats tests and 11 Playwright tests.
-
-- [ ] **Step 13: Manual device pass**
-
-Open the live URL on a **real iPhone** and a **real Android phone**. No emulator reproduces iOS Safari's viewport behavior faithfully, and that is the single most likely thing to break this layout.
-
-Confirm on each:
+Open `https://laysmortorlor.com` on a **real iPhone** and a **real Android phone**. No
+emulator reproduces iOS Safari's viewport behavior faithfully, and that is the single
+most likely thing to break this layout.
 
 - [ ] the CTA button is fully visible without scrolling, with the Safari toolbar shown
 - [ ] the CTA is still fully visible after scrolling collapses the toolbar
@@ -1466,75 +1373,27 @@ Confirm on each:
 - [ ] on a notched device, nothing sits under the notch or the home indicator
 - [ ] rotating to landscape does not clip the CTA
 
-- [ ] **Step 14: Write the operator runbook**
-
-Create `docs/RUNBOOK.md`:
-
-```markdown
-# Runbook — Lay's มตล Snack Corner
-
-## Change today's CTA destination
+- [ ] **Step 11: Commit**
 
 ```bash
-. ./.env.deploy
-export LAYS_REMOTE_HOST LAYS_REMOTE_PATH LAYS_SITE_URL
-./set-link.sh https://today-destination.example.com/
+git add .env.deploy.example
+git commit -m "chore: go live on laysmortorlor.com behind Cloudflare"
 ```
 
-Success ends with a `verified:` line. Anything else means the change is not live.
-
-Only `https://` URLs with a dotted hostname are accepted. Rejected input leaves
-the current live link untouched.
-
-## Change the page itself (copy, layout, images)
-
-```bash
-npm test        # must pass first
-./deploy.sh
-```
-
-Images are cached for a year. To swap one, change its **filename** and update
-`index.html` — overwriting in place will not reach existing visitors.
-
-## Check what is live right now
-
-```bash
-curl -sS -o /dev/null -w '%{http_code} -> %{redirect_url}\n' https://example.com/go
-```
-
-## Past link changes
-
-`link-history.log` in the repo root, one tab-separated line per change
-(UTC timestamp, URL). It is gitignored — local to whoever runs the script.
-
-## If the button goes nowhere
-
-1. `curl -sSI https://example.com/go` — expect `302` and `cf-cache-status: BYPASS`
-2. `cf-cache-status: HIT` means the Cloudflare cache rule for `/go` is not
-   matching. Fix it in Caching -> Cache Rules.
-3. A `500` means `go.php` is broken. It is designed never to 500 — it falls back
-   instead — so this indicates a bad deploy. Re-run `./deploy.sh`.
-4. Landing on the fallback URL means `link.txt` is missing or invalid on the
-   server. Re-run `./set-link.sh` with today's URL.
-```
-
-- [ ] **Step 15: Commit**
-
-```bash
-git add site/index.html site/go.php tests/go.bats docs/RUNBOOK.md
-git commit -m "feat: go live on the campaign domain behind Cloudflare"
-```
+(`.env.deploy` itself stays untracked — only commit if something under version control
+changed, e.g. the example template.)
 
 ---
 
 ## Post-Implementation Checklist
 
-- [ ] `npm test` passes — 31 bats tests, 11 Playwright tests
-- [ ] No occurrence of `REPLACE-WITH-DOMAIN` remains in `site/`
-- [ ] `.env.deploy` is untracked (`git status --ignored | grep .env.deploy`)
-- [ ] `/go` returns `302` with `cf-cache-status: BYPASS`
-- [ ] `/link.txt` returns `403`
+- [x] `npm test` passes — 71 bats tests, 11 Playwright tests
+- [x] No occurrence of `REPLACE-WITH-DOMAIN` remains in `site/`
+- [x] `.env.deploy` is untracked (`git status --ignored | grep .env.deploy`)
+- [x] `docs/RUNBOOK.md` rewritten for DigitalOcean + Apache + Cloudflare, handed to whoever changes the link daily
+- [ ] A real Droplet is provisioned and reachable
+- [ ] `/go` returns `302` with `cf-cache-status: BYPASS` against the live domain
+- [ ] `/link.txt` returns `403` against the live domain
 - [ ] SSL mode is **Full (strict)**, not Flexible
 - [ ] `./set-link.sh` verified against production at least once
 - [ ] Manual pass done on a real iPhone and a real Android device
-- [ ] `docs/RUNBOOK.md` handed to whoever changes the link daily

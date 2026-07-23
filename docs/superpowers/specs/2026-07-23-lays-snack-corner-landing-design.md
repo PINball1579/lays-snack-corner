@@ -8,7 +8,9 @@
 A single-page, mobile-first campaign landing page carrying three visual elements over a
 full-bleed background, with one call-to-action whose destination URL changes daily.
 
-Hosted on Cloudways, fronted by Cloudflare with SSL.
+Hosted on a bare DigitalOcean Droplet (Ubuntu 24.04, Apache 2.4, PHP 8.3-FPM), fronted by
+Cloudflare with SSL. Originally planned for Cloudways (a managed LAMP platform); see §9.0 for
+the hosting change and its rationale.
 
 ## 2. Non-goals
 
@@ -24,9 +26,9 @@ These are explicitly out of scope:
 
 Plain static HTML + CSS, with a single PHP file for the CTA redirect. No build step.
 
-Deployed to a Cloudways **PHP Stack** application, whose `public_html/` is an
-Apache/Nginx document root that serves static files directly. PHP is present on that
-stack by default and is used for exactly one purpose (§7).
+Deployed to a bare DigitalOcean Droplet running Apache 2.4 as the document root server
+(`/var/www/laysmortorlor.com`, provisioned by `provision.sh`; see §9). PHP 8.3-FPM is
+installed for exactly one purpose (§7).
 
 **Rationale.** The page is three images and roughly 100 lines of CSS. A bundler would
 add asset hashing (solving a cache-busting problem a four-file site does not have) and
@@ -238,28 +240,109 @@ modes:
 
 ## 9. Deployment
 
-### 9.1 Cloudways
+### 9.0 Decision: DigitalOcean Droplet instead of Cloudways
 
-1. Launch a server (smallest tier is sufficient), application type **PHP Stack**
-2. Upload `site/*` to `public_html/` via SFTP, or connect the git repo and use
-   Cloudways' git deployment
-3. Add the domain under **Application → Domain Management** as the primary domain
+**Status: superseded.** This design originally planned Cloudways (a managed LAMP
+platform) as the host, per §1/§3 above at the time of writing. The project shipped on a
+bare DigitalOcean Droplet instead. Recorded here rather than silently edited over,
+per the project's own standard of writing decisions down.
+
+**What changed.** Instead of a managed application account (Cloudways' `public_html/`
+with Apache/Nginx already configured, SSH via a master/application user), the campaign
+runs on a Droplet the team provisions itself: a stock Ubuntu 24.04 image with nothing
+installed, root SSH access, and a single idempotent script (`provision.sh`) that installs
+and configures everything from the OS up.
+
+**Why Apache, specifically.** The choice of Apache 2.4 (over Nginx, which is at least as
+common on a from-scratch Droplet) was not arbitrary: `site/.htaccess` — the rewrite rule
+for `/go`, the cache headers, the `link.txt` deny rule — had already been verified against
+a real Apache 2.4 instance (`tests/htaccess.bats`, run against `/usr/sbin/httpd` 2.4.66
+locally) before the hosting decision was revisited. Re-targeting to Nginx would have meant
+translating every one of those directives into Nginx's `location`/`try_files` syntax and
+re-earning that verification from zero. Keeping Apache preserves it exactly — the
+`.htaccess` file that shipped is the same file, unmodified, that already passed against
+real Apache.
+
+**Why origin lockdown is now mandatory, not optional.** On Cloudways, the platform's own
+network layer sits in front of the application; nothing in this design depended on
+Cloudflare being the *only* path to the origin. A bare Droplet has none of that — its
+public IP is directly reachable on 80/443 the moment Apache is listening, Cloudflare
+proxying or not. Anyone who finds the Droplet's IP (a Censys/Shodan scan, a DNS history
+lookup, a misconfigured `A` record before Cloudflare proxying is enabled) can hit the
+origin directly, bypassing every edge protection Cloudflare provides — including the
+`/go` cache-bypass rule and any future rate limiting or WAF rule. `provision.sh`
+therefore fetches Cloudflare's published IPv4/IPv6 ranges at provisioning time and
+configures `ufw` to allow port 80/443 **only** from those ranges — refusing to proceed
+at all if the fetch or validation of those ranges fails, rather than falling back to
+an open origin. This firewall is the direct, load-bearing consequence of dropping a
+platform that used to make it someone else's problem.
+
+**Consequence for future Cloudflare IP-range changes.** Cloudflare periodically adds new
+ranges. `provision.sh` is safe and intended to be re-run whenever that happens — it
+re-fetches the current list and replaces (not accumulates) the firewall rules. See the
+runbook (`docs/RUNBOOK.md`) for the "site unreachable after a Cloudflare IP change" failure
+mode this implies operationally.
+
+### 9.1 DigitalOcean Droplet provisioning
+
+One-time (but safely re-runnable) setup, run as root on a fresh Ubuntu 24.04 Droplet:
+
+```bash
+sudo ./provision.sh
+```
+
+`provision.sh` installs Apache 2.4 and PHP 8.3-FPM, writes the vhost (apex
+`laysmortorlor.com` canonical, `www` redirects to it — the reverse of the usual
+convention, and easy to get backwards), sets `AllowOverride All` on the document root so
+`site/.htaccess` actually takes effect, installs the Cloudflare Origin Certificate,
+configures `mod_remoteip` so access logs show real visitor IPs (not Cloudflare's edge
+IPs) behind the proxy, and locks the firewall to Cloudflare's current IP ranges as
+described in §9.0. It is idempotent: every step either checks current state first or
+overwrites its own previous output, so re-running it converges rather than
+accumulating duplicate config.
+
+Before the first run, the Cloudflare Origin Certificate and its private key must already
+be on the box at `/root/cloudflare-origin.pem` and `/root/cloudflare-origin.key` — see
+§9.2.
 
 ### 9.2 Cloudflare
 
-1. `A` record for the domain → Cloudways server IP, **proxied** (orange cloud)
-2. Generate a **Cloudflare Origin Certificate** (15-year) and install it as a custom SSL
-   certificate in Cloudways
-3. SSL/TLS mode → **Full (strict)**
+1. `A` records for the apex and `www` → the Droplet's public IP, both **proxied**
+   (orange cloud)
+2. Generate a **Cloudflare Origin Certificate** (RSA 2048, 15-year validity, covering
+   the apex and `*.laysmortorlor.com`) under **SSL/TLS → Origin Server → Create
+   Certificate**; place the certificate and private key on the Droplet at
+   `/root/cloudflare-origin.pem` / `.key` before running `provision.sh` (§9.1)
+3. SSL/TLS mode → **Full (strict)**. **Never Flexible** — Flexible leaves the
+   Cloudflare-to-origin hop unencrypted even though the Origin Certificate above exists
+   specifically to encrypt it
 4. Enable **Always Use HTTPS** and **Automatic HTTPS Rewrites**
-5. Add a **Cache Rule**: bypass cache on path `/go`
+5. Add a **Cache Rule**: bypass cache on path `/go`. Mandatory, not optional — without
+   it the edge caches yesterday's redirect and `set-link.sh` can report a successful,
+   verified push while visitors keep landing on the old destination
 
 An Origin Certificate is used rather than Let's Encrypt because LE's HTTP-01 validation
 and its 90-day auto-renew can both fail behind Cloudflare's proxy unless `/.well-known/`
 is specifically excluded from caching. The Origin Certificate removes that failure mode
-for the life of the campaign.
+for the life of the campaign — at 15 years, no renewal is expected to fall within it.
 
-### 9.3 Cache headers (`.htaccess`)
+### 9.3 Deploy and verify
+
+```bash
+./deploy.sh                                  # rsync site/ to the Droplet
+./verify-deploy.sh https://laysmortorlor.com # re-check every behavior in this section
+```
+
+`deploy.sh` excludes `link.txt` from the sync (it is operator state owned by
+`set-link.sh`, not build output — an unexcluded `--delete` sync would silently revert
+the live CTA to whatever is committed) and force-corrects deployed file modes
+(`--chmod=D755,F644`) plus `link.txt`'s mode specifically, regardless of what the
+deploying machine's local permissions happen to be. `verify-deploy.sh` is a full
+post-deploy checklist — status codes, cache headers, the `www`→apex redirect, the
+`/go` cache bypass — runnable against either the public domain or the raw origin IP
+(useful for telling an edge problem from an origin problem).
+
+### 9.4 Cache headers (`.htaccess`)
 
 | Path | `Cache-Control` |
 |---|---|
@@ -267,7 +350,10 @@ for the life of the campaign.
 | `/index.html`, `/style.css` | `no-cache` |
 | `/go` | `no-store` |
 
-`.htaccess` additionally denies direct HTTP access to `link.txt` (§7.4).
+`.htaccess` additionally denies direct HTTP access to `link.txt` (§7.4). This depends on
+`AllowOverride All` being in effect (§9.1) — without it, Apache silently ignores
+`.htaccess` entirely, and `/go` 404s while `link.txt` becomes publicly readable, with no
+error anywhere.
 
 Consequence: replacing an image requires a filename change, but copy and CSS edits go
 live immediately.
@@ -321,12 +407,12 @@ dependency and no race between page load and href assignment.
 
 ## 12. Open items
 
-Both are non-blocking; implementation uses placeholders.
+Both were open at planning time; both are now resolved, no placeholder remains.
 
-| Item | Placeholder | Needed by |
-|---|---|---|
-| Fallback URL for `go.php` | `/` (the site's own root) | before go-live |
-| Domain name | — | Cloudways + Cloudflare setup |
+| Item | Resolved value |
+|---|---|
+| Fallback URL for `go.php` | `https://www.instagram.com/laysthailand` |
+| Domain name | `laysmortorlor.com` (apex canonical, `www` redirects to it) |
 
 The daily CTA URL is supplied by the user each day via `set-link.sh` and needs no
 placeholder.
