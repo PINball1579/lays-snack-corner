@@ -22,7 +22,7 @@ Every task's requirements implicitly include this section.
 - **`set-link.sh` accepts `https://` only.** It rejects `http://`, malformed URLs, empty input, and multi-line input.
 - **Source assets in `material/` are never modified.** Assets are copied into `site/assets/` under web-safe names.
 - **No JavaScript in the delivered page.** The CTA is a plain `<a>`.
-- **Two values are deliberately deferred and resolved in Task 6:** the site domain (literal `REPLACE-WITH-DOMAIN.example.com`) and the `go.php` fallback URL (literal `/`). No other placeholder is permitted anywhere.
+- **RESOLVED (2026-07-23):** the site domain is the apex `laysmortorlor.com` (with `www` redirecting to it), and `go.php`'s `FALLBACK_URL` is `https://www.instagram.com/laysthailand`. Both were deferred at planning time; neither is a placeholder any longer. No placeholder is permitted anywhere in shipped code.
 
 ---
 

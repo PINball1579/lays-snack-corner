@@ -2,6 +2,10 @@
 
 BASE="http://127.0.0.1:8899"
 
+# Must match FALLBACK_URL in site/go.php. go.php redirects here whenever
+# link.txt is missing, empty, or fails validation.
+FALLBACK="https://www.instagram.com/laysthailand"
+
 # Portable file-mode lookup. `stat -f %Lp` is BSD/macOS-only; under GNU
 # coreutils (Linux CI) `-f` means `--file-system` and takes no format
 # operand, so that invocation errors out and, under bats' errexit, fails
@@ -114,37 +118,37 @@ probe_slash() {
 @test "missing link.txt falls back instead of erroring" {
   rm -f "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "empty link.txt falls back" {
   printf '' > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "whitespace-only link.txt falls back" {
   printf '   \n\n' > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "malformed link.txt falls back" {
   printf 'not a url at all\n' > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "non-TLS http:// destination is refused and falls back" {
   printf 'http://insecure.example.com/\n' > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "javascript: scheme is refused and falls back" {
   printf 'javascript:alert(1)\n' > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "query string cannot override the destination (open redirect guard)" {
@@ -156,27 +160,27 @@ probe_slash() {
 @test "userinfo brand-spoof (user@host) destination is refused and falls back" {
   printf 'https://www.lays.co.th@evil.example.com/\n' > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "empty userinfo (:@host) destination is refused and falls back" {
   printf 'https://:@evil.example.com/\n' > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "destination longer than 2048 characters is refused and falls back" {
   long_path="$(printf '%2050s' '' | tr ' ' 'a')"
   printf 'https://valid.example.com/%s\n' "$long_path" > "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
 }
 
 @test "unreadable link.txt falls back instead of leaking a warning or erroring" {
   printf 'https://valid.example.com/today\n' > "$LINK"
   chmod 000 "$LINK"
   run probe
-  [ "$output" = "302 $BASE/" ]
+  [ "$output" = "302 $FALLBACK" ]
   # Pin that the response body carries no PHP warning (and in particular no
   # leaked absolute filesystem path) — not just that status/redirect are
   # right. A dropped is_readable() guard would still satisfy the assertion

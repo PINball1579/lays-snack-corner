@@ -12,10 +12,12 @@ declare(strict_types=1);
 
 const LINK_FILE = __DIR__ . '/link.txt';
 
-// Used when link.txt is missing, empty, or invalid. '/' sends the visitor to
-// this site's own root rather than an error page. Task 6 replaces this with a
-// permanent campaign URL if one is provided.
-const FALLBACK_URL = '/';
+// Used when link.txt is missing, empty, or invalid. A permanent brand
+// destination, so a broken deploy still lands the visitor somewhere real
+// instead of on an error page or back on this same page.
+//
+// Keep this in sync with the FALLBACK constant in tests/go.bats.
+const FALLBACK_URL = 'https://www.instagram.com/laysthailand';
 
 // RFC 3986 does not bound URL length, but no client can follow an
 // unbounded Location header; 2048 is the conservative, widely used ceiling
